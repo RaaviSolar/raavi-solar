@@ -166,8 +166,8 @@ export default function AutoDesignWizard({ isOpen, onClose, onAutoDesign, solarI
                 <div className="flex items-center gap-2"><span className="text-green-600">✓</span> Shade & production calculated</div>
                 <div className="flex items-center gap-2"><span className="text-green-600">✓</span> Finance & proposal ready</div>
               </div>
-              <button onClick={() => { onAutoDesign(desiredKw, panelsNeeded, true); onClose() }} className="w-full bg-gradient-to-r from-blue-600 to-purple-600 text-white font-bold py-3.5 rounded-xl shadow-lg hover:shadow-xl transition">🎉 Show My Design on Map</button>
-              <div className="text-xs text-gray-400">Raavi Solar - Next Level Technology - Zero Errors Guarantee</div>
+              <button onClick={() => { try { console.log('AutoDesign clicked', desiredKw, panelsNeeded); onAutoDesign(desiredKw, panelsNeeded, true); } catch(e){ console.error(e); alert('Design error: '+e) } finally { onClose(); } }} className="w-full bg-gradient-to-r from-blue-600 to-purple-600 text-white font-bold py-3.5 rounded-xl shadow-lg hover:shadow-xl transition active:scale-95">🎉 Show My Design on Map</button>
+              <div className="text-xs text-gray-400">Click करने पर map पर green roof + blue panels दिखेंगे • Raavi Solar Zero Errors</div>
             </div>
           )}
         </div>
