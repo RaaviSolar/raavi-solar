@@ -157,18 +157,17 @@ export default function SolarDesigner() {
   }
 
   const handleAutoDesign = (desiredKw: number, panelsNeeded: number, autoRoof: boolean) => {
-    console.log('handleAutoDesign called', desiredKw, panelsNeeded, autoRoof, 'center', currentCenter)
+    console.log('handleAutoDesign FIXED called', desiredKw, panelsNeeded, autoRoof, 'center', currentCenter)
     try {
       const turf = (window as any).turf
       let targetPoly: number[][] | null = roofPolygon
-      const areaPerPanel = panelW * panelH * 1.4
-      const totalAreaNeeded = panelsNeeded * areaPerPanel * 1.2
+      const areaPerPanel = panelW * panelH * 1.6
+      const totalAreaNeeded = panelsNeeded * areaPerPanel * 3.0 // Big for visibility
       const side = Math.sqrt(totalAreaNeeded)
       const halfSideLat = (side / 2) / 111000
       const halfSideLng = (side / 2) / (111000 * Math.cos(currentCenter.lat * Math.PI / 180))
       const cLat = currentCenter.lat, cLng = currentCenter.lng
 
-      // Always create/recreate roof polygon if autoRoof or no existing
       if (!targetPoly || autoRoof) {
         targetPoly = [
           [cLng - halfSideLng, cLat - halfSideLat],
@@ -177,30 +176,31 @@ export default function SolarDesigner() {
           [cLng - halfSideLng, cLat + halfSideLat],
           [cLng - halfSideLng, cLat - halfSideLat],
         ]
-        if (turf) {
-          try {
-            const poly = turf.polygon([targetPoly])
-            setRoofPolygon(targetPoly)
-            setRoofArea(turf.area(poly))
-          } catch { setRoofPolygon(targetPoly); setRoofArea(totalAreaNeeded) }
-        } else {
-          setRoofPolygon(targetPoly)
-          setRoofArea(totalAreaNeeded)
-        }
+        setRoofPolygon(targetPoly)
+        setRoofArea(turf ? (() => { try { return turf.area(turf.polygon([targetPoly])) } catch { return totalAreaNeeded } })() : totalAreaNeeded)
       } else {
-        // Use existing roof but still ensure area set
         if (!roofArea) setRoofArea(totalAreaNeeded)
       }
 
-      // Draw green roof on map - always try
+      // Draw ULTRA VISIBLE green roof
       if (L && mapRef.current && targetPoly) {
         try {
           const drawnItems = (window as any).drawnItemsGlobal
-          if (drawnItems) drawnItems.clearLayers()
+          if (drawnItems) { try { drawnItems.clearLayers() } catch {} }
           const latlngs = targetPoly.map(([lng, lat]: number[]) => ({ lat, lng }))
-          const layer = L.polygon(latlngs, { color: '#16a34a', weight: 3, dashArray: '8 8', fillColor: '#dcfce7', fillOpacity: 0.5 }).addTo(mapRef.current)
-          if (drawnItems) drawnItems.addLayer(layer)
-          mapRef.current.setView([cLat, cLng], 19)
+          // Clear old
+          try { (window as any).panelLayers?.forEach((l: any) => { try { mapRef.current.removeLayer(l) } catch {} }); (window as any).panelLayers = [] } catch {}
+          try { (window as any).roofLayers?.forEach((l: any) => { try { mapRef.current.removeLayer(l) } catch {} }) } catch {}
+          ;(window as any).roofLayers = []
+          const roofLayer = L.polygon(latlngs, { color: '#15803d', weight: 5, dashArray: '12 8', fillColor: '#22c55e', fillOpacity: 0.45 }).addTo(mapRef.current)
+          ;(window as any).roofLayers = [roofLayer]
+          if (drawnItems) { try { drawnItems.addLayer(roofLayer) } catch {} }
+          // Red center marker
+          const centerMarker = L.circleMarker([cLat, cLng], { radius: 8, color: '#dc2626', fillColor: '#ef4444', fillOpacity: 1, weight: 3 }).addTo(mapRef.current)
+          ;(window as any).roofLayers.push(centerMarker)
+          mapRef.current.setView([cLat, cLng], 20)
+          // Flash animation
+          setTimeout(() => { try { mapRef.current.invalidateSize() } catch {} }, 200)
         } catch (e) { console.error('Draw roof failed', e) }
       }
 
@@ -209,52 +209,62 @@ export default function SolarDesigner() {
         setAzimuth(Math.round(solarInsights.solarPotential.roofSegmentStats[0].azimuthDegrees))
       }
 
-      // Try turf placement first, if fails fallback to manual grid with map layers
+      // Create HIGHLY VISIBLE blue panels with numbers
+      const createVisiblePanels = () => {
+        if (!L || !mapRef.current) return [] as any[]
+        const newPanels: any[] = []
+        const cols = 5
+        const panelLayersArr: any[] = []
+        for (let i = 0; i < panelsNeeded; i++) {
+          const row = Math.floor(i / cols), col = i % cols
+          // Spread panels inside roof
+          const lat = cLat + (row * 0.00004) - 0.00004
+          const lng = cLng + (col * 0.00004) - 0.00008
+          const center: [number, number] = [lat, lng]
+          const rect = getRect(center, panelW, panelH)
+          try {
+            const layer = L.polygon(rect, { color: '#1e3a8a', weight: 3, fillColor: '#2563eb', fillOpacity: 0.95 }).addTo(mapRef.current)
+            panelLayersArr.push(layer)
+            // Number marker
+            const numIcon = L.divIcon({ html: `<div style="background:#111;color:#fff;font-size:11px;font-weight:800;padding:2px 6px;border-radius:12px;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.3)">${i + 1}</div>`, className: '', iconSize: [24, 20], iconAnchor: [12, 10] })
+            const numMarker = L.marker([lat, lng], { icon: numIcon }).addTo(mapRef.current)
+            panelLayersArr.push(numMarker)
+          } catch (e) { console.error('Panel draw failed', e) }
+          newPanels.push({ lat, lng, id: Math.random().toString(36).slice(2) })
+        }
+        ;(window as any).panelLayers = panelLayersArr
+        return newPanels
+      }
+
+      // Try turf first, else fallback
       let placed = false
       if (turf && mapRef.current && L && targetPoly) {
         try {
           const result = autoPlaceFromPoly(targetPoly, mapRef.current, turf, panelsNeeded)
-          if (result.placed > 0) placed = true
-        } catch (e) { console.error('autoPlaceFromPoly failed', e) }
+          if (result.placed > 0) {
+            placed = true
+            // Enhance already placed panels with numbers
+            setTimeout(() => {
+              try {
+                const currentPanels = (window as any).panelLayers || []
+                currentPanels.forEach((layer: any, idx: number) => {
+                  if (layer.getBounds) {
+                    const bounds = layer.getBounds()
+                    const center = bounds.getCenter()
+                    const numIcon = L.divIcon({ html: `<div style="background:#111;color:#fff;font-size:10px;font-weight:700;padding:1px 5px;border-radius:10px">${idx + 1}</div>`, className: '' })
+                    L.marker(center, { icon: numIcon }).addTo(mapRef.current)
+                  }
+                })
+              } catch {}
+            }, 300)
+          }
+        } catch (e) { console.error('turf place failed', e) }
       }
 
       if (!placed) {
-        // Fallback: manual grid with actual Leaflet blue panels
-        try {
-          if (L && mapRef.current) {
-            ;(window as any).panelLayers?.forEach((l: any) => { try { mapRef.current.removeLayer(l) } catch {} })
-            ;(window as any).panelLayers = []
-            const newPanels: any[] = []
-            const cols = 5
-            for (let i = 0; i < panelsNeeded; i++) {
-              const row = Math.floor(i / cols), col = i % cols
-              const lat = cLat + (row * 0.000025) - 0.00005
-              const lng = cLng + (col * 0.000025) - 0.00005
-              const center: [number, number] = [lat, lng]
-              const rect = getRect(center, panelW, panelH)
-              try {
-                const layer = L.polygon(rect, { color: '#2563eb', weight: 1.5, fillColor: '#3b82f6', fillOpacity: 0.85 }).addTo(mapRef.current)
-                ;(window as any).panelLayers.push(layer)
-              } catch {}
-              newPanels.push({ lat, lng, id: Math.random().toString(36).slice(2) })
-            }
-            setPanels(newPanels as any)
-          } else {
-            // No map at all - still set state
-            const fallbackPanels = Array.from({ length: panelsNeeded }, (_, i) => ({
-              lat: cLat + (i * 0.00001), lng: cLng + (i * 0.00001), id: Math.random().toString(36).slice(2)
-            }))
-            setPanels(fallbackPanels as any)
-          }
-          if (!roofArea) setRoofArea(panelsNeeded * 2.5)
-        } catch (e) {
-          console.error('Fallback panel placement failed', e)
-          const fallbackPanels = Array.from({ length: panelsNeeded }, (_, i) => ({
-            lat: cLat + (i * 0.00001), lng: cLng + (i * 0.00001), id: Math.random().toString(36).slice(2)
-          }))
-          setPanels(fallbackPanels as any)
-          setRoofArea(panelsNeeded * 2.5)
-        }
+        const newPanels = createVisiblePanels()
+        setPanels(newPanels as any)
+        if (!roofArea) setRoofArea(panelsNeeded * 3)
       }
 
       if (selectedLead) { updateLead(selectedLead.id, { system_size_kw: desiredKw, panel_count: panelsNeeded }).catch(()=>{}) }
@@ -288,7 +298,7 @@ export default function SolarDesigner() {
 
   return (
     <div className="h-screen flex flex-col bg-[#f8fafc] text-gray-900 overflow-hidden">
-      <div className="h-14 bg-white border-b border-gray-200 flex items-center justify-between px-4 shadow-sm">
+      <div className="h-14 bg-white border-b border-gray-200 flex items-center justify-between px-4 shadow-sm relative z-[100]">
         <div className="flex items-center gap-3">
           <img src="/raavi-logo.png" alt="Raavi Solar" className="h-8 w-auto object-contain" style={{ maxWidth: '160px' }} />
           <div className="hidden lg:flex items-center gap-2 ml-3 pl-3 border-l border-gray-200">
@@ -343,7 +353,7 @@ export default function SolarDesigner() {
         </div>
 
         <div className="flex-1 relative bg-[#eef2f7] flex flex-col">
-          <div className="absolute top-3 left-3 z-[500] flex gap-2">
+          <div className="absolute top-3 left-3 z-30 flex gap-2">
             <div className="bg-white/90 backdrop-blur border border-gray-200 rounded-xl p-2 flex gap-2 shadow-lg">
               <button onClick={() => { try { if (!mapRef.current || !L) return; // @ts-ignore
                   new L.Draw.Polygon(mapRef.current, { allowIntersection: false, shapeOptions: { color: '#2563eb', weight: 3 } }).enable()
@@ -353,7 +363,7 @@ export default function SolarDesigner() {
               {roofArea > 0 && <span className="text-xs bg-green-50 text-green-700 border border-green-200 px-3 py-2 rounded-lg font-semibold">{roofArea.toFixed(0)}m² • {panels.length} panels</span>}
             </div>
           </div>
-          <div className="absolute top-3 right-3 z-[500]">
+          <div className="absolute top-14 right-3 z-30">
             <AddressSearch
               map={mapRef.current}
               L={L}
