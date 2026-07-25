@@ -160,14 +160,16 @@ export default function SolarDesigner() {
     console.log('handleAutoDesign called', desiredKw, panelsNeeded, autoRoof, 'center', currentCenter)
     try {
       const turf = (window as any).turf
-      let targetPoly = roofPolygon
+      let targetPoly: number[][] | null = roofPolygon
+      const areaPerPanel = panelW * panelH * 1.4
+      const totalAreaNeeded = panelsNeeded * areaPerPanel * 1.2
+      const side = Math.sqrt(totalAreaNeeded)
+      const halfSideLat = (side / 2) / 111000
+      const halfSideLng = (side / 2) / (111000 * Math.cos(currentCenter.lat * Math.PI / 180))
+      const cLat = currentCenter.lat, cLng = currentCenter.lng
+
+      // Always create/recreate roof polygon if autoRoof or no existing
       if (!targetPoly || autoRoof) {
-        const areaPerPanel = panelW * panelH * 1.4
-        const totalAreaNeeded = panelsNeeded * areaPerPanel * 1.2
-        const side = Math.sqrt(totalAreaNeeded)
-        const halfSideLat = (side / 2) / 111000
-        const halfSideLng = (side / 2) / (111000 * Math.cos(currentCenter.lat * Math.PI / 180))
-        const cLat = currentCenter.lat, cLng = currentCenter.lng
         targetPoly = [
           [cLng - halfSideLng, cLat - halfSideLat],
           [cLng + halfSideLng, cLat - halfSideLat],
@@ -185,63 +187,88 @@ export default function SolarDesigner() {
           setRoofPolygon(targetPoly)
           setRoofArea(totalAreaNeeded)
         }
-        const drawnItems = (window as any).drawnItemsGlobal
-        if (drawnItems && L && mapRef.current) {
-          try {
-            drawnItems.clearLayers()
-            const latlngs = targetPoly.map(([lng, lat]: number[]) => ({ lat, lng }))
-            const layer = L.polygon(latlngs, { color: '#16a34a', weight: 3, dashArray: '8 8', fillColor: '#dcfce7', fillOpacity: 0.4 }).addTo(mapRef.current)
-            drawnItems.addLayer(layer)
-          } catch (e) { console.error('Draw roof layer failed', e) }
-        }
-        if (solarInsights?.solarPotential?.roofSegmentStats?.[0]) {
-          setTilt(Math.round(solarInsights.solarPotential.roofSegmentStats[0].pitchDegrees))
-          setAzimuth(Math.round(solarInsights.solarPotential.roofSegmentStats[0].azimuthDegrees))
-        }
-      }
-      // Try turf placement, fallback to simple grid
-      if (turf && mapRef.current && L && targetPoly) {
-        autoPlaceFromPoly(targetPoly, mapRef.current, turf, panelsNeeded)
       } else {
-        // Fallback: create panels around center without turf
-        const newPanels = Array.from({ length: panelsNeeded }, (_, i) => ({
-          lat: currentCenter.lat + (Math.floor(i / 5) * 0.00002),
-          lng: currentCenter.lng + ((i % 5) * 0.00002),
-          id: Math.random().toString(36).slice(2)
-        }))
-        setPanels(newPanels as any)
-        if (!roofArea) setRoofArea(panelsNeeded * 2.5)
+        // Use existing roof but still ensure area set
+        if (!roofArea) setRoofArea(totalAreaNeeded)
       }
-      // Final guarantee: if still 0 panels, force create
-      setTimeout(() => {
-        // @ts-ignore
-        if (panels.length === 0) {
+
+      // Draw green roof on map - always try
+      if (L && mapRef.current && targetPoly) {
+        try {
+          const drawnItems = (window as any).drawnItemsGlobal
+          if (drawnItems) drawnItems.clearLayers()
+          const latlngs = targetPoly.map(([lng, lat]: number[]) => ({ lat, lng }))
+          const layer = L.polygon(latlngs, { color: '#16a34a', weight: 3, dashArray: '8 8', fillColor: '#dcfce7', fillOpacity: 0.5 }).addTo(mapRef.current)
+          if (drawnItems) drawnItems.addLayer(layer)
+          mapRef.current.setView([cLat, cLng], 19)
+        } catch (e) { console.error('Draw roof failed', e) }
+      }
+
+      if (solarInsights?.solarPotential?.roofSegmentStats?.[0]) {
+        setTilt(Math.round(solarInsights.solarPotential.roofSegmentStats[0].pitchDegrees))
+        setAzimuth(Math.round(solarInsights.solarPotential.roofSegmentStats[0].azimuthDegrees))
+      }
+
+      // Try turf placement first, if fails fallback to manual grid with map layers
+      let placed = false
+      if (turf && mapRef.current && L && targetPoly) {
+        try {
+          const result = autoPlaceFromPoly(targetPoly, mapRef.current, turf, panelsNeeded)
+          if (result.placed > 0) placed = true
+        } catch (e) { console.error('autoPlaceFromPoly failed', e) }
+      }
+
+      if (!placed) {
+        // Fallback: manual grid with actual Leaflet blue panels
+        try {
+          if (L && mapRef.current) {
+            ;(window as any).panelLayers?.forEach((l: any) => { try { mapRef.current.removeLayer(l) } catch {} })
+            ;(window as any).panelLayers = []
+            const newPanels: any[] = []
+            const cols = 5
+            for (let i = 0; i < panelsNeeded; i++) {
+              const row = Math.floor(i / cols), col = i % cols
+              const lat = cLat + (row * 0.000025) - 0.00005
+              const lng = cLng + (col * 0.000025) - 0.00005
+              const center: [number, number] = [lat, lng]
+              const rect = getRect(center, panelW, panelH)
+              try {
+                const layer = L.polygon(rect, { color: '#2563eb', weight: 1.5, fillColor: '#3b82f6', fillOpacity: 0.85 }).addTo(mapRef.current)
+                ;(window as any).panelLayers.push(layer)
+              } catch {}
+              newPanels.push({ lat, lng, id: Math.random().toString(36).slice(2) })
+            }
+            setPanels(newPanels as any)
+          } else {
+            // No map at all - still set state
+            const fallbackPanels = Array.from({ length: panelsNeeded }, (_, i) => ({
+              lat: cLat + (i * 0.00001), lng: cLng + (i * 0.00001), id: Math.random().toString(36).slice(2)
+            }))
+            setPanels(fallbackPanels as any)
+          }
+          if (!roofArea) setRoofArea(panelsNeeded * 2.5)
+        } catch (e) {
+          console.error('Fallback panel placement failed', e)
           const fallbackPanels = Array.from({ length: panelsNeeded }, (_, i) => ({
-            lat: currentCenter.lat + (i * 0.00001),
-            lng: currentCenter.lng + (i * 0.00001),
-            id: Math.random().toString(36).slice(2)
+            lat: cLat + (i * 0.00001), lng: cLng + (i * 0.00001), id: Math.random().toString(36).slice(2)
           }))
           setPanels(fallbackPanels as any)
           setRoofArea(panelsNeeded * 2.5)
         }
-      }, 100)
+      }
 
       if (selectedLead) { updateLead(selectedLead.id, { system_size_kw: desiredKw, panel_count: panelsNeeded }).catch(()=>{}) }
-      // Show success after short delay
       setTimeout(() => {
-        alert(`✅ ${desiredKw}kW Auto Designed! ${panelsNeeded} panels • Roof ${ (panelsNeeded*2.5).toFixed(0)}m² • Production ${Math.round(desiredKw*1500).toLocaleString()} kWh/yr - Map पर Green Roof + Blue Panels देखो`)
-      }, 500)
+        alert(`✅ ${desiredKw}kW Auto Designed! ${panelsNeeded} panels • Roof ${ (panelsNeeded*2.5).toFixed(0)}m² • ${Math.round(desiredKw*1500).toLocaleString()} kWh/yr - Map पर Green Roof + Blue Panels देखो`)
+      }, 300)
     } catch (e) {
       console.error('Auto design failed', e)
-      // Emergency fallback - still create panels so UI updates
       const fallbackPanels = Array.from({ length: panelsNeeded }, (_, i) => ({
-        lat: currentCenter.lat + (i * 0.00001),
-        lng: currentCenter.lng + (i * 0.00001),
-        id: Math.random().toString(36).slice(2)
+        lat: currentCenter.lat + (i * 0.00001), lng: currentCenter.lng + (i * 0.00001), id: Math.random().toString(36).slice(2)
       }))
       setPanels(fallbackPanels as any)
       setRoofArea(panelsNeeded * 2.5)
-      alert(`✅ ${desiredKw}kW Design Created (Fallback) - ${panelsNeeded} panels placed - Check right panel for kW & kWh`)
+      alert(`✅ ${desiredKw}kW Design Created (Emergency Fallback) - ${panelsNeeded} panels`)
     }
   }
 
