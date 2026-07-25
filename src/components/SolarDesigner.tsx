@@ -7,6 +7,7 @@ import { useRouter } from 'next/navigation'
 import UserMenu from './UserMenu'
 import JaipurMarketPanel from './JaipurMarketPanel'
 import AdvancedToolsHub from './AdvancedToolsHub'
+import AddressSearch from './AddressSearch'
 import { JAIPUR_PANELS } from '@/lib/jaipurMarketData'
 import dynamic from 'next/dynamic'
 
@@ -43,8 +44,6 @@ export default function SolarDesigner() {
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [newLead, setNewLead] = useState({ name: '', phone: '', address: '' })
   const [solarInsights, setSolarInsights] = useState<any>(null)
-  const [search, setSearch] = useState('')
-  const [searchResults, setSearchResults] = useState<any[]>([])
   const [is3D, setIs3D] = useState(false)
   const [shadeEnabled, setShadeEnabled] = useState(false)
   const [currentCenter, setCurrentCenter] = useState({ lat: 26.9124, lng: 75.7873 })
@@ -56,6 +55,13 @@ export default function SolarDesigner() {
     try {
       setIsLoggedIn(!!localStorage.getItem('mock_user'))
     } catch {}
+    const openWizardHandler = () => setShowWizard(true)
+    window.addEventListener('raavi-open-wizard' as any, openWizardHandler)
+    window.addEventListener('raavi-autodesign' as any, openWizardHandler)
+    return () => {
+      window.removeEventListener('raavi-open-wizard' as any, openWizardHandler)
+      window.removeEventListener('raavi-autodesign' as any, openWizardHandler)
+    }
   }, [])
 
   useEffect(() => {
@@ -203,28 +209,6 @@ export default function SolarDesigner() {
     } catch (e) { console.error(e) }
   }
 
-  const handleSearch = async (q = search) => {
-    if (!q) return
-    try {
-      const r = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&limit=5&countrycodes=in`)
-      const data = await r.json()
-      setSearchResults(data)
-    } catch { }
-  }
-
-  const selectResult = (item: any) => {
-    try {
-      if (!mapRef.current) return
-      const lat = parseFloat(item.lat), lng = parseFloat(item.lon)
-      mapRef.current.setView([lat, lng], 20)
-      L.marker([lat, lng]).addTo(mapRef.current).bindPopup(item.display_name).openPopup()
-      setSearchResults([]); setSearch(item.display_name)
-      setCurrentCenter({ lat, lng })
-      fetchSolarInsights(lat, lng)
-      setTimeout(() => setShowWizard(true), 600)
-    } catch {}
-  }
-
   if (loading) return <div className="h-screen bg-gray-50 grid place-items-center text-gray-600">Loading Raavi Solar...</div>
 
   return (
@@ -294,12 +278,20 @@ export default function SolarDesigner() {
               {roofArea > 0 && <span className="text-xs bg-green-50 text-green-700 border border-green-200 px-3 py-2 rounded-lg font-semibold">{roofArea.toFixed(0)}m² • {panels.length} panels</span>}
             </div>
           </div>
-          <div className="absolute top-3 right-3 z-[500] w-[300px]">
-            <div className="bg-white border border-gray-200 rounded-xl shadow-lg overflow-hidden">
-              <input value={search} onChange={e => setSearch(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSearch()} placeholder="🔍 Address डालें - Tonk Road Jaipur" className="w-full px-4 py-2.5 text-sm focus:outline-none placeholder:text-gray-400" />
-              <div className="px-3 py-1.5 bg-blue-50 text-[10px] text-blue-700 border-t border-blue-100">💡 Address select करते ही AI kW पूछेगा और auto design करेगा</div>
-            </div>
-            {searchResults.length > 0 && <div className="mt-2 bg-white border border-gray-200 rounded-xl shadow-xl max-h-48 overflow-auto">{searchResults.map((r: any, i: number) => <div key={i} onClick={() => selectResult(r)} className="p-3 text-xs hover:bg-blue-50 cursor-pointer border-b border-gray-100 last:border-0 text-gray-700"><b>{r.display_name.split(',')[0]}</b><br/><span className="text-gray-500">{r.display_name}</span></div>)}</div>}
+          <div className="absolute top-3 right-3 z-[500]">
+            <AddressSearch
+              map={mapRef.current}
+              L={L}
+              currentCenter={currentCenter}
+              setCurrentCenter={setCurrentCenter}
+              onLocationChange={(lat, lng, addr) => {
+                setCurrentCenter({ lat, lng });
+                fetchSolarInsights(lat, lng);
+                if (selectedLead) { updateLead(selectedLead.id, { lat, lng, address: addr }).catch(() => {}) }
+                // Auto open AI wizard for next-level flow
+                setTimeout(() => setShowWizard(true), 700);
+              }}
+            />
           </div>
           <div ref={mapContainerRef} className="flex-1 w-full" />
           {shadeEnabled && mapRef.current && L && isClient && <ShadeOverlay map={mapRef.current} L={L} center={currentCenter} enabled={shadeEnabled} />}
